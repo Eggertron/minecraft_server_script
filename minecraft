@@ -1,0 +1,230 @@
+#!/bin/bash
+# /etc/init.d/minecraft
+# version 0.3.2 2011-01-27 (YYYY-MM-DD)
+
+### BEGIN INIT INFO
+# Provides:   minecraft
+# Required-Start: $local_fs $remote_fs
+# Required-Stop:  $local_fs $remote_fs
+# Should-Start:   $network
+# Should-Stop:    $network
+# Default-Start:  2 3 4 5
+# Default-Stop:   0 1 6
+# Short-Description:    Minecraft server
+# Description:    Starts the minecraft server
+### END INIT INFO
+
+export PATH="/usr/local/bin:/bin:/usr/bin"
+
+# Settings start
+USERNAME="mc"
+
+SERVICE="mcpc-plus-1.5.2-R1.1-forge738-B616.jar"
+MCPATH="/home/$USERNAME/minecraft"
+BACKUPDIR="/home/$USERNAME/backup"
+
+MEMORY_OPTS="-Xmx1700M -Xms900M"
+JAVA_OPTIONS="-XX:MaxPermSize=256m -XX:UseSSE=4 -XX:+UseConcMarkSweepGC -XX:+UseCMSCompactAtFullCollection -XX:+UseParNewGC -XX:+DisableExplicitGC -XX:+AggressiveOpts"
+
+INVOCATION="java ${MEMORY_OPTS} ${JAVA_OPTIONS} -jar $SERVICE nogui"
+PORT=$(grep server-port $MCPATH/server.properties | cut -d '=' -f 2)
+
+RDIFF_BACKUP="nocache nice -n10 rdiff-backup "
+
+if [ -z "$PORT" ]; then
+        PORT=25565
+fi
+
+# Settings end
+
+if [ $(whoami) != $USERNAME ]; then
+        su $USERNAME -l -c "$(readlink -f $0) $*"
+        exit $?
+fi
+
+is_running_heavy() {
+        is_running
+        if [ $? -ne 0 ]; then
+                return 1
+        fi
+
+        CheckMinecraft 127.0.0.1 25565 > /dev/null 2>&1
+        if [ $? -ne 0 ]; then
+                return 2
+        fi
+        return 0
+}
+
+is_running() {
+        if [ ! -e $MCPATH/java.pid ]; then
+                return 1
+        fi
+
+        pid=$(cat $MCPATH/java.pid)
+        if [ -z $pid ]; then
+                return 1
+        fi
+
+        ps -eo "%p" | grep -q "^\\s*$pid\\s*\$"
+        return $?
+}
+
+mc_start() {
+        if is_running; then
+                echo "Tried to start but $SERVICE was already running!"
+        else
+                echo "$SERVICE was not running... starting."
+
+                cd $MCPATH
+                #./sync_from_repo.sh
+                echo "" > server.log
+                screen -dmS mc$PORT $INVOCATION &
+
+                for (( i=0; i < 10; i++ )); do
+                        screenpid=$(ps -eo '%p %a' | grep -v grep | grep -i screen | grep mc$PORT | awk '{print $1}')
+                        javapid=$(ps -eo '%P %p' | grep "^\\s*$screenpid " | awk '{print $2}')
+
+                        if [[ -n "$screenpid" && -n "$javapid" ]]; then
+                                break
+                        fi
+
+                        sleep 1
+                done
+
+                if [[ -n "$screenpid" && -n "$javapid" ]]; then
+                        echo "$SERVICE is now running."
+                        echo "$javapid" > $MCPATH/java.pid
+                        echo "$screenpid.mc$PORT" > $MCPATH/screen.name
+                else
+                        echo "Could not start $SERVICE."
+                fi
+        fi
+}
+
+mc_saveoff() {
+        if is_running; then
+                echo "$SERVICE is running... suspending saves"
+                mc_exec "say SERVER BACKUP STARTING. Server going readonly..."
+                mc_exec "save-off"
+                mc_exec "save-all"
+                sync
+                sleep 10
+        else
+                echo "$SERVICE was not running. Not suspending saves."
+        fi
+}
+
+mc_saveon() {
+        if is_running; then
+                echo "$SERVICE is running... re-enabling saves"
+                mc_exec "save-on"
+                mc_exec "say SERVER BACKUP ENDED. Server going read-write..."
+        else
+                echo "$SERVICE was not running. Not resuming saves."
+        fi
+}
+
+mc_kill() {
+        pid=$(cat $MCPATH/java.pid)
+
+        echo "terminating process with pid $pid"
+        kill $pid
+
+        for (( i=0; i < 10; i++ )); do
+                is_running || break
+                sleep 1
+        done
+
+        if is_running; then
+                echo "$SERVICE could not be terminated, killing..."
+                kill -SIGKILL $pid
+                echo "$SERVICE killed"
+        else
+                echo "$SERVICE terminated"
+        fi
+}
+
+mc_stop() {
+        if is_running; then
+                echo "$SERVICE is running... stopping."
+
+                mc_exec "say SERVER SHUTTING DOWN IN 10 SECONDS. Saving map..."
+                #mc_exec "save-all"
+                sleep 10
+                mc_exec "stop"
+
+                for (( i=0; i < 35; i++ )); do
+                        is_running || break
+                        sleep 1
+                done
+        else
+                echo "$SERVICE was not running."
+        fi
+
+        if is_running; then
+                echo "$SERVICE could not be shut down cleanly... still running."
+                mc_kill
+        else
+                echo "$SERVICE is shut down."
+        fi
+
+        rm $MCPATH/java.pid
+        rm $MCPATH/screen.name
+}
+
+mc_backup() {
+        echo "Backing up minecraft world"
+
+        [ -d "$BACKUPDIR" ] || mkdir -p "$BACKUPDIR"
+
+        $RDIFF_BACKUP $MCPATH/world "$BACKUPDIR"
+        $RDIFF_BACKUP --remove-older-than 14D --force $BACKUPDIR
+
+        echo "Backup complete"
+}
+
+mc_exec() {
+        if is_running; then
+                screen -p 0 -S $(cat $MCPATH/screen.name) -X stuff "$@$(printf \\r)"
+        else
+                echo "$SERVICE was not running. Not executing command."
+        fi
+}
+
+#Start-Stop here
+case "$1" in
+  start)
+    mc_start
+    ;;
+  stop)
+    mc_stop
+    ;;
+  restart)
+    mc_stop
+    mc_start
+    ;;
+  backup)
+    mc_saveoff
+    mc_backup
+    mc_saveon
+    ;;
+  exec)
+    shift
+    mc_exec "$@"
+    ;;
+  status)
+    if is_running_heavy
+    then
+      echo "$SERVICE is running."
+    else
+      echo "$SERVICE is not running."
+    fi
+    ;;
+
+  *)
+  echo "Usage: $(readlink -f $0) {start|stop|restart|backup|exec|status}"
+  exit 1
+  ;;
+esac
+
+exit 0
