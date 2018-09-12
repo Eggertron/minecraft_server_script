@@ -33,6 +33,7 @@ INVOCATION="java ${MEMORY_OPTS} -jar $SERVICE nogui"
 PORT=$(grep server-port $MCPATH/server.properties | cut -d '=' -f 2)
 
 RDIFF_BACKUP="nocache nice -n10 rdiff-backup "
+TAR_BACKUP="tar -cvf"
 
 if [ -z "$PORT" ]; then
         PORT=25565
@@ -182,8 +183,9 @@ mc_backup() {
 
         [ -d "$BACKUPDIR" ] || mkdir -p "$BACKUPDIR"
 
-        $RDIFF_BACKUP $MCPATH/world "$BACKUPDIR"
-        $RDIFF_BACKUP --remove-older-than 14D --force $BACKUPDIR
+        #$RDIFF_BACKUP $MCPATH/world "$BACKUPDIR"
+        #$RDIFF_BACKUP --remove-older-than 14D --force $BACKUPDIR
+	$TAR_BACKUP $BACKUPDIR/backup.$(date +%m%d%Y%H%M%S).tar $MCPATH/world
 
         echo "Backup complete"
 }
