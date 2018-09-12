@@ -17,16 +17,19 @@
 export PATH="/usr/local/bin:/bin:/usr/bin"
 
 # Settings start
-USERNAME="mc"
+USERNAME="pi"
 
-SERVICE="mcpc-plus-1.5.2-R1.1-forge738-B616.jar"
-MCPATH="/home/$USERNAME/minecraft"
-BACKUPDIR="/home/$USERNAME/backup"
+SERVICE="paperclip.jar"
+MCPATH="/opt/minecraftserver/minecraft"
+BACKUPDIR="$MCPATH/backup"
+STATUSFILE="$MCPATH/.serverstatus"
 
-MEMORY_OPTS="-Xmx1700M -Xms900M"
+MEMORY_OPTS="-Xmx800M -Xms800M"
+#MEMORY_OPTS="-Xmx1700M -Xms900M"
 JAVA_OPTIONS="-XX:MaxPermSize=256m -XX:UseSSE=4 -XX:+UseConcMarkSweepGC -XX:+UseCMSCompactAtFullCollection -XX:+UseParNewGC -XX:+DisableExplicitGC -XX:+AggressiveOpts"
 
-INVOCATION="java ${MEMORY_OPTS} ${JAVA_OPTIONS} -jar $SERVICE nogui"
+INVOCATION="java ${MEMORY_OPTS} -jar $SERVICE nogui"
+#INVOCATION="java ${MEMORY_OPTS} ${JAVA_OPTIONS} -jar $SERVICE nogui"
 PORT=$(grep server-port $MCPATH/server.properties | cut -d '=' -f 2)
 
 RDIFF_BACKUP="nocache nice -n10 rdiff-backup "
@@ -95,6 +98,7 @@ mc_start() {
                         echo "$SERVICE is now running."
                         echo "$javapid" > $MCPATH/java.pid
                         echo "$screenpid.mc$PORT" > $MCPATH/screen.name
+                        echo "1" > $STATUSFILE
                 else
                         echo "Could not start $SERVICE."
                 fi
@@ -170,6 +174,7 @@ mc_stop() {
 
         rm $MCPATH/java.pid
         rm $MCPATH/screen.name
+        rm $STATUSFILE
 }
 
 mc_backup() {
@@ -208,6 +213,12 @@ case "$1" in
     mc_backup
     mc_saveon
     ;;
+  watchdog)
+    if [[ ! is_running_heavy && -e $STATUSFILE ]]
+    then
+      mc_start
+    fi
+    ;;
   exec)
     shift
     mc_exec "$@"
@@ -222,7 +233,7 @@ case "$1" in
     ;;
 
   *)
-  echo "Usage: $(readlink -f $0) {start|stop|restart|backup|exec|status}"
+  echo "Usage: $(readlink -f $0) {start|stop|restart|backup|watchdog|exec|status}"
   exit 1
   ;;
 esac
